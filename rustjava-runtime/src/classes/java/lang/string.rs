@@ -708,7 +708,7 @@ impl String {
     }
 
     async fn value_of_object(jvm: &Jvm, _: &mut RuntimeContext, value: ClassInstanceRef<Object>) -> Result<ClassInstanceRef<Self>> {
-        tracing::warn!("stub java.lang.String::valueOf({value:?})");
+        tracing::debug!("java.lang.String::valueOf({value:?})");
 
         Ok(if value.is_null() {
             JavaLangString::from_rust_string(jvm, "null").await?.into()
