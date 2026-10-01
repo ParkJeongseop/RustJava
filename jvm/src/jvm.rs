@@ -985,7 +985,7 @@ impl Jvm {
         tracing::trace!("Collecting garbage");
 
         let extra_roots = self.inner.extra_roots.read().as_ref().map(|f| f()).unwrap_or_default();
-        let garbage = {
+        let mut garbage = {
             let threads = self.inner.threads.read();
             let global_references = self.inner.global_references.objects.read();
             let all_objects = self.inner.all_objects.read();
@@ -1002,6 +1002,10 @@ impl Jvm {
                 &extra_roots,
             )
         };
+
+        // `all_objects` is a hash set whose iteration order differs from process to process; destroy
+        // in identity order so an embedder's allocator sees the same sequence on every run.
+        garbage.sort_by_key(|object| object.identity());
 
         let garbage_count = garbage.len();
 
