@@ -12,8 +12,13 @@ pub fn determine_garbage(
     all_class_instances: &HashSet<Box<dyn ClassInstance>>,
     classes: &BTreeMap<String, Class>,
     interned_strings: &[Box<dyn ClassInstance>],
+    extra_roots: &[Box<dyn ClassInstance>],
 ) -> Vec<Box<dyn ClassInstance>> {
     let mut reachable_objects = HashSet::new();
+
+    extra_roots.iter().for_each(|x| {
+        find_reachable_objects(jvm, x, &mut reachable_objects);
+    });
 
     classes.values().for_each(|x| {
         find_reachable_objects(jvm, &x.java_class(), &mut reachable_objects);

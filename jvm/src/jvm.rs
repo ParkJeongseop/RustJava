@@ -49,7 +49,12 @@ struct JvmInner {
     get_current_thread_id: Box<dyn Fn() -> u64 + Sync + Send>,
     bootstrap_class_loader: Box<dyn BootstrapClassLoader>,
     bootstrapping: AtomicBool,
+    /// Extra GC roots the embedder knows about but the JVM cannot see, such as object references
+    /// held in a native guest's registers and stacks. Consulted on every collection.
+    extra_roots: RwLock<Option<ExtraRoots>>,
 }
+
+type ExtraRoots = Box<dyn Fn() -> Vec<Box<dyn ClassInstance>> + Sync + Send>;
 
 #[derive(Clone)]
 pub struct Jvm {
@@ -74,6 +79,7 @@ impl Jvm {
                 string_pool: RwLock::new(BTreeMap::new()),
                 monitors: RwLock::new(BTreeMap::new()),
                 get_current_thread_id: Box::new(get_current_thread_id),
+                extra_roots: RwLock::new(None),
                 bootstrap_class_loader: Box::new(bootstrap_class_loader),
                 bootstrapping: AtomicBool::new(true),
             }),
@@ -966,9 +972,19 @@ impl Jvm {
             .collect()
     }
 
+    /// Registers a callback that reports additional roots on every collection. Objects it returns
+    /// are kept alive together with everything reachable from them.
+    pub fn set_extra_roots<F>(&self, extra_roots: F)
+    where
+        F: Fn() -> Vec<Box<dyn ClassInstance>> + Sync + Send + 'static,
+    {
+        *self.inner.extra_roots.write() = Some(Box::new(extra_roots));
+    }
+
     pub fn collect_garbage(&self) -> Result<usize> {
         tracing::trace!("Collecting garbage");
 
+        let extra_roots = self.inner.extra_roots.read().as_ref().map(|f| f()).unwrap_or_default();
         let garbage = {
             let threads = self.inner.threads.read();
             let global_references = self.inner.global_references.objects.read();
@@ -976,7 +992,15 @@ impl Jvm {
             let classes = self.inner.classes.read();
             let interned_strings = self.interned_strings();
 
-            determine_garbage(self, &threads, &global_references, &all_objects, &classes, &interned_strings)
+            determine_garbage(
+                self,
+                &threads,
+                &global_references,
+                &all_objects,
+                &classes,
+                &interned_strings,
+                &extra_roots,
+            )
         };
 
         let garbage_count = garbage.len();
