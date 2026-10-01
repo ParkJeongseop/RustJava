@@ -1004,7 +1004,7 @@ impl Jvm {
     pub fn collect_garbage(&self) -> anyhow::Result<usize> {
         tracing::trace!("Collecting garbage");
 
-        let garbage = {
+        let mut garbage = {
             let threads = self.inner.threads.read();
             let global_references = self.inner.global_references.objects.read();
             let all_objects = self.inner.all_objects.read();
@@ -1035,6 +1035,10 @@ impl Jvm {
                 &root_identities,
             )?
         };
+
+        // `all_objects` is a hash set whose iteration order differs from process to process; destroy
+        // in identity order so an embedder's allocator sees the same sequence on every run.
+        garbage.sort_by_key(|object| object.identity());
 
         let garbage_count = garbage.len();
 
