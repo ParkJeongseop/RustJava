@@ -12,6 +12,9 @@ use crate::{
     },
 };
 
+/// System property naming a class that wraps every resource stream, or unset.
+pub const RESOURCE_STREAM_WRAPPER_PROPERTY: &str = "rustjava.resource_stream_wrapper";
+
 // class java.lang.ClassLoader
 pub struct ClassLoader;
 
@@ -350,11 +353,27 @@ impl ClassLoader {
             return Ok(None.into());
         }
 
-        let stream = jvm
+        let stream: ClassInstanceRef<URL> = jvm
             .invoke_virtual(&resource_url, "java/net/URL", "openStream", "()Ljava/io/InputStream;", ())
             .await?;
+        if stream.is_null() {
+            return Ok(stream);
+        }
 
-        Ok(stream)
+        // Some runtimes hand resources out as a richer stream than the API promises, and titles
+        // compiled against them cast or dispatch accordingly (LG WIPI returns a DataInputStream);
+        // an embedder sets `rustjava.resource_stream_wrapper` to the class to wrap resources in.
+        let key = JavaLangString::from_rust_string(jvm, RESOURCE_STREAM_WRAPPER_PROPERTY).await?;
+        let wrapper: ClassInstanceRef<String> = jvm
+            .invoke_static("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", (key,))
+            .await?;
+        if wrapper.is_null() {
+            return Ok(stream);
+        }
+        let wrapper = JavaLangString::to_rust_string(jvm, &wrapper).await?;
+        let wrapped = jvm.new_class(&wrapper, "(Ljava/io/InputStream;)V", (stream,)).await?;
+
+        Ok(wrapped.into())
     }
 
     async fn find_resource(
