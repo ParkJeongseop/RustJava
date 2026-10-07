@@ -81,7 +81,7 @@ impl InputStreamReader {
         let charset_name = JavaLangString::to_rust_string(jvm, &charset).await?.to_ascii_uppercase();
         let charset_name = match charset_name.as_str() {
             "UTF-8" | "UTF8" => "UTF-8",
-            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "MS949" | "CP949" => "EUC-KR",
+            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "KSC5601" | "KSC-5601" | "MS949" | "CP949" => "EUC-KR",
             _ => return Err(jvm.exception("java/io/UnsupportedEncodingException", &charset_name).await),
         };
 
