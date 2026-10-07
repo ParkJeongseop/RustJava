@@ -1443,7 +1443,7 @@ impl String {
     fn decode_str(charset: &str, bytes: &[u8]) -> Option<RustString> {
         Some(match charset.to_ascii_uppercase().replace('_', "-").as_str() {
             "UTF-8" | "UTF8" => RustString::from_utf8_lossy(bytes).into_owned(),
-            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "MS949" | "CP949" => encoding_rs::EUC_KR.decode(bytes).0.to_string(),
+            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "KSC5601" | "KSC-5601" | "MS949" | "CP949" => encoding_rs::EUC_KR.decode(bytes).0.to_string(),
             "ISO-8859-1" | "LATIN1" | "US-ASCII" | "ASCII" => bytes.iter().map(|&b| b as char).collect(),
             _ => return None,
         })
@@ -1452,7 +1452,7 @@ impl String {
     fn encode_str(charset: &str, string: &str) -> Option<Vec<u8>> {
         Some(match charset.to_ascii_uppercase().replace('_', "-").as_str() {
             "UTF-8" | "UTF8" => string.as_bytes().to_vec(),
-            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "MS949" | "CP949" => encoding_rs::EUC_KR.encode(string).0.to_vec(),
+            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "KSC5601" | "KSC-5601" | "MS949" | "CP949" => encoding_rs::EUC_KR.encode(string).0.to_vec(),
             "ISO-8859-1" | "LATIN1" => string.chars().map(|c| if (c as u32) <= 0xff { c as u8 } else { b'?' }).collect(),
             "US-ASCII" | "ASCII" => string.chars().map(|c| if c.is_ascii() { c as u8 } else { b'?' }).collect(),
             _ => return None,

@@ -87,7 +87,7 @@ impl OutputStreamWriter {
         let encoding_name = JavaLangString::to_rust_string(jvm, encoding).await?.to_ascii_uppercase();
         if !matches!(
             encoding_name.as_str(),
-            "UTF-8" | "UTF8" | "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "MS949" | "CP949"
+            "UTF-8" | "UTF8" | "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "KSC5601" | "KSC-5601" | "MS949" | "CP949"
         ) {
             return Err(jvm.exception("java/io/UnsupportedEncodingException", &encoding_name).await);
         }
