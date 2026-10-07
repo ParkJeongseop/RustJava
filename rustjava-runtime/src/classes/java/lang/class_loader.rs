@@ -26,11 +26,13 @@ impl ClassLoader {
             interfaces: vec![],
             methods: vec![
                 JavaMethodProto::new("<init>", "(Ljava/lang/ClassLoader;)V", Self::init, MethodAccessFlags::PROTECTED),
+                // Synchronized as in Java: a second thread asking for a class that is being loaded waits
+                // and then finds it loaded. A loader may hand out a class's definition only once.
                 JavaMethodProto::new(
                     "loadClass",
                     "(Ljava/lang/String;)Ljava/lang/Class;",
                     Self::load_class,
-                    MethodAccessFlags::PUBLIC,
+                    MethodAccessFlags::PUBLIC | MethodAccessFlags::SYNCHRONIZED,
                 ),
                 JavaMethodProto::new(
                     "findClass",
