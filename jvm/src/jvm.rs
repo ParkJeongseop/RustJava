@@ -418,9 +418,16 @@ impl Jvm {
         tracing::trace!("Invoke special {class_name}.{name}:{descriptor}({args:?})");
 
         let class = self.resolve_class(class_name).await?;
-        let method = class.definition.method(name, descriptor, false);
+        // `super.method()` names the direct superclass even when the method is inherited from
+        // further up, so resolution continues through the superclasses; a constructor is only
+        // ever the named class's own.
+        let resolved = if name.starts_with('<') {
+            class.definition.method(name, descriptor, false).map(|method| (class.clone(), method))
+        } else {
+            self.resolve_method(&class, name, descriptor)
+        };
 
-        if let Some(method) = method {
+        if let Some((declaring_class, method)) = resolved {
             let args = iter::once(JavaValue::Object(Some(clone_box(&**instance))))
                 .chain(args.into_vec())
                 .collect::<Vec<_>>();
@@ -432,7 +439,7 @@ impl Jvm {
             }
 
             Ok(self
-                .execute_method(&class, Some(instance.clone()), &method, args.into_boxed_slice())
+                .execute_method(&declaring_class, Some(instance.clone()), &method, args.into_boxed_slice())
                 .await?
                 .into())
         } else {
