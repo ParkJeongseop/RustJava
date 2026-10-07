@@ -16,6 +16,7 @@ mod jvm;
 mod method;
 mod monitor;
 mod thread;
+mod time_slice;
 mod r#type;
 mod value;
 
@@ -43,6 +44,7 @@ pub use self::{
     jvm::Jvm,
     method::Method,
     monitor::{MonitorWait, MonitorWaitTimeout},
+    time_slice::TimeSliceEnd,
     r#type::JavaType,
     value::{JavaChar, JavaValue},
 };

@@ -3,7 +3,7 @@
 use alloc::{boxed::Box, format, vec::Vec};
 
 use classfile::{AttributeInfoCode, ConstantPoolReference, Opcode};
-use jvm::{ClassInstance, JavaChar, JavaError, JavaType, JavaValue, Jvm, Result};
+use jvm::{ClassInstance, JavaChar, JavaError, JavaType, JavaValue, Jvm, Result, TimeSliceEnd};
 
 use crate::stack_frame::StackFrame;
 
@@ -60,6 +60,9 @@ impl Interpreter {
             *next_index += 1;
             *pc = current_offset;
             tracing::trace!("Opcode {opcode:?}");
+            if jvm.time_slice_expired() {
+                TimeSliceEnd::default().await;
+            }
             match opcode {
                 Opcode::Aaload
                 | Opcode::Baload

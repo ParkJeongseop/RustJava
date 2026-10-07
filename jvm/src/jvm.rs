@@ -7,7 +7,7 @@ use core::{
     future::{Future, poll_fn},
     iter,
     pin::pin,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     task::Poll,
 };
 
@@ -49,6 +49,8 @@ struct JvmInner {
     get_current_thread_id: Box<dyn Fn() -> u64 + Sync + Send>,
     bootstrap_class_loader: Box<dyn BootstrapClassLoader>,
     bootstrapping: AtomicBool,
+    /// Bytecode instructions executed since the last time slice ended; see `time_slice_expired`.
+    time_slice: AtomicU32,
     /// Extra GC roots the embedder knows about but the JVM cannot see, such as object references
     /// held in a native guest's registers and stacks. Consulted on every collection.
     extra_roots: RwLock<Option<ExtraRoots>>,
@@ -82,6 +84,7 @@ impl Jvm {
                 extra_roots: RwLock::new(None),
                 bootstrap_class_loader: Box::new(bootstrap_class_loader),
                 bootstrapping: AtomicBool::new(true),
+                time_slice: AtomicU32::new(0),
             }),
         };
 
@@ -986,6 +989,21 @@ impl Jvm {
         F: Fn() -> Vec<Box<dyn ClassInstance>> + Sync + Send + 'static,
     {
         *self.inner.extra_roots.write() = Some(Box::new(extra_roots));
+    }
+
+    /// Counts one executed bytecode instruction and reports when the running thread's time slice
+    /// is over. Threads are cooperative tasks: without slices, one that never blocks (a game loop
+    /// spinning until the event thread has painted) would keep every other thread from running.
+    /// The slice length is in the range of KVM's scheduler (`500 * priority` bytecodes).
+    pub fn time_slice_expired(&self) -> bool {
+        const TIME_SLICE: u32 = 2000;
+
+        if self.inner.time_slice.fetch_add(1, Ordering::Relaxed) < TIME_SLICE {
+            return false;
+        }
+        self.inner.time_slice.store(0, Ordering::Relaxed);
+
+        true
     }
 
     pub fn collect_garbage(&self) -> Result<usize> {
