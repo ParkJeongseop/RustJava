@@ -274,9 +274,28 @@ impl Jvm {
     where
         T: From<JavaValue>,
     {
-        tracing::trace!("Get field {}.{name}:{descriptor}", instance.class_definition().name());
+        self.get_field_from(instance, &*instance.class_definition(), name, descriptor).await
+    }
 
-        let field = self.find_field(&*instance.class_definition(), name, descriptor)?;
+    /// Reads the field `class_name` refers to by `name`: the one that class declares or inherits
+    /// (JVMS 5.4.3.2). A subclass may declare a field of the same name and type, which is another
+    /// field of the instance.
+    pub async fn get_class_field<T>(&self, instance: &Box<dyn ClassInstance>, class_name: &str, name: &str, descriptor: &str) -> Result<T>
+    where
+        T: From<JavaValue>,
+    {
+        let class = self.resolve_class(class_name).await?;
+
+        self.get_field_from(instance, &*class.definition, name, descriptor).await
+    }
+
+    async fn get_field_from<T>(&self, instance: &Box<dyn ClassInstance>, class: &dyn ClassDefinition, name: &str, descriptor: &str) -> Result<T>
+    where
+        T: From<JavaValue>,
+    {
+        tracing::trace!("Get field {}.{name}:{descriptor}", class.name());
+
+        let field = self.find_field(class, name, descriptor)?;
 
         if let Some(field) = field {
             let value = instance.get_field(&*field)?;
@@ -306,9 +325,42 @@ impl Jvm {
     where
         T: Into<JavaValue> + Debug,
     {
-        tracing::trace!("Put field {}.{name}:{descriptor} = {value:?}", instance.class_definition().name());
+        let class = instance.class_definition();
 
-        let field = self.find_field(&*instance.class_definition(), name, descriptor)?;
+        self.put_field_from(instance, &*class, name, descriptor, value).await
+    }
+
+    /// Writes the field `class_name` refers to by `name`; see [`Self::get_class_field`].
+    pub async fn put_class_field<T>(
+        &self,
+        instance: &mut Box<dyn ClassInstance>,
+        class_name: &str,
+        name: &str,
+        descriptor: &str,
+        value: T,
+    ) -> Result<()>
+    where
+        T: Into<JavaValue> + Debug,
+    {
+        let class = self.resolve_class(class_name).await?;
+
+        self.put_field_from(instance, &*class.definition, name, descriptor, value).await
+    }
+
+    async fn put_field_from<T>(
+        &self,
+        instance: &mut Box<dyn ClassInstance>,
+        class: &dyn ClassDefinition,
+        name: &str,
+        descriptor: &str,
+        value: T,
+    ) -> Result<()>
+    where
+        T: Into<JavaValue> + Debug,
+    {
+        tracing::trace!("Put field {}.{name}:{descriptor} = {value:?}", class.name());
+
+        let field = self.find_field(class, name, descriptor)?;
 
         if let Some(field) = field {
             instance.put_field(&*field, value.into())

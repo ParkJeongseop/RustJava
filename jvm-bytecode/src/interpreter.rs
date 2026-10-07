@@ -448,7 +448,7 @@ impl Interpreter {
                         return Err(jvm.exception("java/lang/NullPointerException", "null").await);
                     }
 
-                    let value = jvm.get_field(&instance.unwrap(), &x.name, &x.descriptor).await?;
+                    let value = jvm.get_class_field(&instance.unwrap(), &x.class, &x.name, &x.descriptor).await?;
 
                     stack_frame.operand_stack.push(Self::to_stack_frame_type(value));
                 }
@@ -924,7 +924,8 @@ impl Interpreter {
 
                     let value = Self::to_field_type(&x.descriptor, value);
 
-                    jvm.put_field(instance.as_mut().unwrap(), &x.name, &x.descriptor, value).await?;
+                    jvm.put_class_field(instance.as_mut().unwrap(), &x.class, &x.name, &x.descriptor, value)
+                        .await?;
                 }
                 Opcode::Putstatic(x) => {
                     let x = x.as_field_ref();
