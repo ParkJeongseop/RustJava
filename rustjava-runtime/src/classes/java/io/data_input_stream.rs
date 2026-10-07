@@ -7,7 +7,7 @@ use jvm_types::{ClassAccessFlags, MethodAccessFlags};
 use crate::{
     RuntimeClassProto, RuntimeContext,
     classes::java::{
-        io::{DataInput, InputStream},
+        io::{DataInput, FilterInputStream, InputStream},
         lang::String,
     },
 };
@@ -284,14 +284,14 @@ impl DataInputStream {
     async fn skip_bytes(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, n: i32) -> Result<i32> {
         tracing::debug!("java.io.DataInputStream::skipBytes({this:?}, {n:?})");
 
-        let r#in = jvm.get_field(&this, "in", "Ljava/io/InputStream;").await?;
+        let r#in = FilterInputStream::wrapped(jvm, &this).await?;
         let skipped: i64 = jvm.invoke_virtual(&r#in, "java/io/InputStream", "skip", "(J)J", (n as i64,)).await?;
 
         Ok(skipped as _)
     }
 
     async fn read_required_byte(jvm: &Jvm, this: &ClassInstanceRef<Self>) -> Result<u8> {
-        let r#in = jvm.get_field(this, "in", "Ljava/io/InputStream;").await?;
+        let r#in = FilterInputStream::wrapped(jvm, this).await?;
         let value: i32 = jvm.invoke_virtual(&r#in, "java/io/InputStream", "read", "()I", ()).await?;
         if value == -1 {
             return Err(jvm.exception("java/io/EOFException", "End of stream").await);
