@@ -52,16 +52,22 @@ impl Runtime {
         Ok(instance.into())
     }
 
-    async fn total_memory(_: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<i64> {
-        tracing::warn!("stub java.lang.Runtime::totalMemory({this:?})");
+    // The JVM keeps no byte count of its heap. Titles compare these against what they need (a
+    // handset of the time had a few megabytes), so a handset-sized heap with most of it free is
+    // what they are told; one megabyte made some refuse to start.
+    const REPORTED_TOTAL_MEMORY: i64 = 16 * 1024 * 1024;
+    const REPORTED_FREE_MEMORY: i64 = 12 * 1024 * 1024;
 
-        Ok(0x100000) // TODO: hardcoded
+    async fn total_memory(_: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<i64> {
+        tracing::debug!("java.lang.Runtime::totalMemory({this:?})");
+
+        Ok(Self::REPORTED_TOTAL_MEMORY)
     }
 
     async fn free_memory(_: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<i64> {
-        tracing::warn!("stub java.lang.Runtime::freeMemory({this:?})");
+        tracing::debug!("java.lang.Runtime::freeMemory({this:?})");
 
-        Ok(0x100000) // TODO: hardcoded
+        Ok(Self::REPORTED_FREE_MEMORY)
     }
 
     async fn gc(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<()> {
