@@ -53,6 +53,12 @@ impl System {
                 ),
                 JavaMethodProto::new("exit", "(I)V", Self::exit, MethodAccessFlags::STATIC),
                 JavaMethodProto::new(
+                    "exec",
+                    "([Ljava/lang/String;)V",
+                    Self::exec,
+                    MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new(
                     "identityHashCode",
                     "(Ljava/lang/Object;)I",
                     Self::identity_hash_code,
@@ -286,6 +292,14 @@ impl System {
         tracing::debug!("java.lang.System::exit({status})");
 
         context.exit(status);
+        Ok(())
+    }
+
+    // SK-VM: launches another application of the handset (a title hands over to the browser with
+    // {"XCE", ...}). There is no other application here; the call is logged and ignored.
+    async fn exec(_jvm: &Jvm, _context: &mut RuntimeContext, command: ClassInstanceRef<Array<ClassInstanceRef<String>>>) -> Result<()> {
+        tracing::warn!("stub java.lang.System::exec({command:?})");
+
         Ok(())
     }
 

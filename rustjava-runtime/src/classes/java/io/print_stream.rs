@@ -65,6 +65,7 @@ impl PrintStream {
                 JavaMethodProto::new("println", "()V", Self::println, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("println", "(Ljava/lang/Object;)V", Self::println_object, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("println", "(Ljava/lang/String;)V", Self::println_string, MethodAccessFlags::PUBLIC),
+                JavaMethodProto::new("println", "([B)V", Self::println_bytes, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("println", "(I)V", Self::println_int, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("println", "(J)V", Self::println_long, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("println", "(C)V", Self::println_char, MethodAccessFlags::PUBLIC),
@@ -504,6 +505,22 @@ impl PrintStream {
         let value: ClassInstanceRef<String> = jvm
             .invoke_static("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", (value,))
             .await?;
+        Self::with_monitor(jvm, &this, async {
+            let _: () = jvm
+                .invoke_virtual(&this, "java/io/PrintStream", "print", "(Ljava/lang/String;)V", (value,))
+                .await?;
+            Self::new_line(jvm, &this).await
+        })
+        .await
+    }
+
+    // SK-VM: a byte array is a line of text in the platform charset.
+    async fn println_bytes(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, value: ClassInstanceRef<Array<i8>>) -> Result<()> {
+        let value: ClassInstanceRef<String> = if value.is_null() {
+            JavaLangString::from_rust_string(jvm, "null").await?.into()
+        } else {
+            jvm.new_class("java/lang/String", "([B)V", (value,)).await?.into()
+        };
         Self::with_monitor(jvm, &this, async {
             let _: () = jvm
                 .invoke_virtual(&this, "java/io/PrintStream", "print", "(Ljava/lang/String;)V", (value,))

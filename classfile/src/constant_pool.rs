@@ -10,7 +10,44 @@ use nom::{
 
 fn parse_utf8(data: &[u8]) -> IResult<&[u8], Arc<String>> {
     let (data, length) = be_u16(data)?;
-    map_res(take(length as usize), |utf8: &[u8]| String::from_utf8(utf8.to_vec()).map(Arc::new)).parse(data)
+    map_res(take(length as usize), |utf8: &[u8]| decode_modified_utf8(utf8).map(Arc::new).ok_or(())).parse(data)
+}
+
+/// A CONSTANT_Utf8 holds Java's modified UTF-8, not UTF-8: the NUL character is the two bytes
+/// `C0 80`, and a character outside the BMP is its two surrogates encoded as three bytes each.
+/// Standard UTF-8 is a subset, so the plain decoder is tried first.
+fn decode_modified_utf8(bytes: &[u8]) -> Option<String> {
+    if let Ok(string) = core::str::from_utf8(bytes) {
+        return Some(String::from(string));
+    }
+
+    let mut units = alloc::vec::Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        if b0 & 0x80 == 0 {
+            units.push(b0 as u16);
+            i += 1;
+        } else if b0 & 0xe0 == 0xc0 {
+            let b1 = *bytes.get(i + 1)?;
+            if b1 & 0xc0 != 0x80 {
+                return None;
+            }
+            units.push(((b0 as u16 & 0x1f) << 6) | (b1 as u16 & 0x3f));
+            i += 2;
+        } else if b0 & 0xf0 == 0xe0 {
+            let (b1, b2) = (*bytes.get(i + 1)?, *bytes.get(i + 2)?);
+            if b1 & 0xc0 != 0x80 || b2 & 0xc0 != 0x80 {
+                return None;
+            }
+            units.push(((b0 as u16 & 0x0f) << 12) | ((b1 as u16 & 0x3f) << 6) | (b2 as u16 & 0x3f));
+            i += 3;
+        } else {
+            return None;
+        }
+    }
+
+    String::from_utf16(&units).ok()
 }
 
 #[derive(Debug)]
@@ -287,6 +324,16 @@ impl FieldMethodref {
 #[cfg(test)]
 mod tests {
     use super::ConstantPoolItem;
+
+    #[test]
+    fn utf8_constants_are_modified_utf8() {
+        // "a\0b" with the NUL as C0 80, then U+1F600 as a surrogate pair of three bytes each
+        let data = [0x00, 0x02, 0x01, 0x00, 0x0a, b'a', 0xc0, 0x80, b'b', 0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80];
+        let (_, constant_pool) = ConstantPoolItem::parse_all(&data).unwrap();
+
+        let utf8 = constant_pool.get(&1).and_then(ConstantPoolItem::utf8).unwrap();
+        assert_eq!(&**utf8, "a\0b\u{1f600}");
+    }
 
     #[test]
     fn empty_constant_pool_is_valid() {
