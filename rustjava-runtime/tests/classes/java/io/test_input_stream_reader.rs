@@ -104,6 +104,55 @@ async fn test_isr() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_input_stream_reader_drains_available_input() -> Result<()> {
+    let jvm = test_jvm().await?;
+    let value = "123456789한글\r\n가나다".repeat(20);
+    let expected: Vec<JavaChar> = value.encode_utf16().collect();
+
+    for encoding in [encoding_rs::UTF_8, encoding_rs::EUC_KR] {
+        let (encoded, _, _) = encoding.encode(&value);
+        let mut bytes = jvm.instantiate_array("B", encoded.len()).await?;
+        jvm.store_array(&mut bytes, 0, encoded.iter().map(|byte| *byte as i8)).await?;
+        let input = jvm.new_class("java/io/ByteArrayInputStream", "([B)V", (bytes,)).await?;
+        let charset = JavaLangString::from_rust_string(&jvm, encoding.name()).await?;
+        let reader = jvm
+            .new_class(
+                "java/io/InputStreamReader",
+                "(Ljava/io/InputStream;Ljava/lang/String;)V",
+                (input.clone(), charset),
+            )
+            .await?;
+        let mut chars = jvm.instantiate_array("C", expected.len() + 4).await?;
+        jvm.store_array(&mut chars, 0, vec!['!' as JavaChar; expected.len() + 4]).await?;
+
+        let read: i32 = jvm
+            .invoke_virtual(
+                &reader,
+                "java/io/Reader",
+                "read",
+                "([CII)I",
+                (chars.clone(), 2, (expected.len() + 2) as i32),
+            )
+            .await?;
+        assert_eq!(read as usize, expected.len(), "{}", encoding.name());
+        assert_eq!(jvm.load_array::<JavaChar>(&chars, 2, expected.len()).await?, expected);
+        assert_eq!(jvm.load_array::<JavaChar>(&chars, 0, 2).await?, ['!' as JavaChar; 2]);
+        assert_eq!(jvm.load_array::<JavaChar>(&chars, expected.len() + 2, 2).await?, ['!' as JavaChar; 2]);
+        assert_eq!(
+            jvm.invoke_virtual::<_, i32>(&input, "java/io/InputStream", "available", "()I", ())
+                .await?,
+            0
+        );
+        assert_eq!(
+            jvm.invoke_virtual::<_, i32>(&reader, "java/io/Reader", "read", "([C)I", (chars,)).await?,
+            -1
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_input_stream_reader_preserves_split_multibyte_and_buffered_eof() -> Result<()> {
     let jvm = test_jvm().await?;
     let value = "123456789한";
