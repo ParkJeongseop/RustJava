@@ -262,7 +262,7 @@ fn java_5_formatter_io_types_use_covariant_methods_and_compiler_bridges() {
     }
 
     let print_stream = get_runtime_class_proto("java/io/PrintStream").expect("PrintStream must be registered");
-    assert_eq!(print_stream.methods.len(), 42);
+    assert_eq!(print_stream.methods.len(), 43); // 42 standard plus the handset println(byte[])
     assert_eq!(print_stream.interfaces, vec!["java/lang/Appendable", "java/io/Closeable"]);
     for (name, descriptor) in [
         ("<init>", "(Ljava/io/OutputStream;)V"),
