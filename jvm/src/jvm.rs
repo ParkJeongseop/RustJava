@@ -231,7 +231,8 @@ impl Jvm {
 
         let class = self.resolve_class(class_name).await?;
 
-        if let Some((declaring_class, field)) = self.resolve_field(&class, name, descriptor, true) {
+        let resolved = Self::resolve_field(&self.inner.classes.read(), &class, name, descriptor, true).map(|(class, field)| (class.clone(), field));
+        if let Some((declaring_class, field)) = resolved {
             if !field.access_flags().contains(FieldAccessFlags::STATIC) {
                 return Err(self
                     .exception("java/lang/IncompatibleClassChangeError", &format!("{class_name}.{name}:{descriptor}"))
@@ -268,7 +269,8 @@ impl Jvm {
 
         let class = self.resolve_class(class_name).await?;
 
-        if let Some((mut declaring_class, field)) = self.resolve_field(&class, name, descriptor, true) {
+        let resolved = Self::resolve_field(&self.inner.classes.read(), &class, name, descriptor, true).map(|(class, field)| (class.clone(), field));
+        if let Some((mut declaring_class, field)) = resolved {
             if !field.access_flags().contains(FieldAccessFlags::STATIC) {
                 return Err(self
                     .exception("java/lang/IncompatibleClassChangeError", &format!("{class_name}.{name}:{descriptor}"))
@@ -291,8 +293,7 @@ impl Jvm {
     {
         tracing::trace!("Get field {class_name}.{name}:{descriptor}");
 
-        let class = self.resolve_class(class_name).await?;
-        if let Some((_, field)) = self.resolve_field(&class, name, descriptor, false) {
+        if let Some(field) = self.resolve_instance_field(class_name, name, descriptor).await? {
             if field.access_flags().contains(FieldAccessFlags::STATIC) {
                 return Err(self
                     .exception("java/lang/IncompatibleClassChangeError", &format!("{class_name}.{name}:{descriptor}"))
@@ -324,8 +325,7 @@ impl Jvm {
     {
         tracing::trace!("Put field {class_name}.{name}:{descriptor} = {value:?}");
 
-        let class = self.resolve_class(class_name).await?;
-        if let Some((_, field)) = self.resolve_field(&class, name, descriptor, false) {
+        if let Some(field) = self.resolve_instance_field(class_name, name, descriptor).await? {
             if field.access_flags().contains(FieldAccessFlags::STATIC) {
                 return Err(self
                     .exception("java/lang/IncompatibleClassChangeError", &format!("{class_name}.{name}:{descriptor}"))
@@ -1298,25 +1298,46 @@ impl Jvm {
 
     // JVMS 5.4.3.2 field resolution: search the class, then its superinterfaces, then its superclass.
     // Matching is by name and descriptor only; the caller checks static-ness afterwards.
-    fn resolve_field(&self, class: &Class, name: &str, descriptor: &str, expected_static: bool) -> Option<(Class, Box<dyn Field>)> {
+    // The classes are searched where `classes` holds them: a field access is too frequent to copy one for.
+    fn resolve_field<'a>(
+        classes: &'a BTreeMap<String, Class>,
+        class: &'a Class,
+        name: &str,
+        descriptor: &str,
+        expected_static: bool,
+    ) -> Option<(&'a Class, Box<dyn Field>)> {
         if let Some(field) = class
             .definition
             .field(name, descriptor, expected_static)
             .or_else(|| class.definition.field(name, descriptor, !expected_static))
         {
-            return Some((class.clone(), field));
+            return Some((class, field));
         }
 
         for interface in class.definition.interface_names() {
-            if let Some(interface_class) = self.get_class(&interface)
-                && let Some(found) = self.resolve_field(&interface_class, name, descriptor, expected_static)
+            if let Some(interface_class) = classes.get(&interface)
+                && let Some(found) = Self::resolve_field(classes, interface_class, name, descriptor, expected_static)
             {
                 return Some(found);
             }
         }
 
-        let super_class = self.get_class(&class.definition.super_class_name()?)?;
-        self.resolve_field(&super_class, name, descriptor, expected_static)
+        let super_class = classes.get(&class.definition.super_class_name()?)?;
+        Self::resolve_field(classes, super_class, name, descriptor, expected_static)
+    }
+
+    /// The field an instance access names. A registered class is searched where it is registered; another is loaded first.
+    async fn resolve_instance_field(&self, class_name: &str, name: &str, descriptor: &str) -> Result<Option<Box<dyn Field>>> {
+        let field = |classes: &BTreeMap<String, Class>, class: &Class| Some(Self::resolve_field(classes, class, name, descriptor, false)?.1);
+        {
+            let classes = self.inner.classes.read();
+            if let Some(class) = classes.get(class_name) {
+                return Ok(field(&classes, class));
+            }
+        }
+
+        let class = self.resolve_class(class_name).await?;
+        Ok(field(&self.inner.classes.read(), &class))
     }
 
     // JVMS 5.4.3.3 method resolution searches the class hierarchy before inherited interface methods.
