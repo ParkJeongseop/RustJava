@@ -391,20 +391,27 @@ impl Jvm {
                 .await);
         }
 
-        let mut class = self.get_class(&instance.class_definition().name());
+        let instance_class = instance.class_definition();
+        let instance_class_name = instance_class.name();
         let mut selected = None;
-        while let Some(candidate_class) = class {
-            if let Some(candidate_method) = candidate_class.definition.method(name, descriptor, false)
-                && self.method_overrides(&candidate_class, &candidate_method, &resolved_class, &resolved_method)
-            {
-                selected = Some((candidate_class, candidate_method));
-                break;
-            }
+        if instance_class_name == resolved_class.definition.name() {
+            // The instance's own class declares the resolved method, so nothing overrides it.
+            selected = Some((resolved_class, resolved_method));
+        } else {
+            let mut class = self.get_class(&instance_class_name);
+            while let Some(candidate_class) = class {
+                if let Some(candidate_method) = candidate_class.definition.method(name, descriptor, false)
+                    && self.method_overrides(&candidate_class, &candidate_method, &resolved_class, &resolved_method)
+                {
+                    selected = Some((candidate_class, candidate_method));
+                    break;
+                }
 
-            class = candidate_class
-                .definition
-                .super_class_name()
-                .and_then(|super_class| self.get_class(&super_class));
+                class = candidate_class
+                    .definition
+                    .super_class_name()
+                    .and_then(|super_class| self.get_class(&super_class));
+            }
         }
 
         let Some((declaring_class, method)) = selected else {
@@ -815,8 +822,12 @@ impl Jvm {
         }
     }
 
-    #[async_recursion::async_recursion]
     pub async fn resolve_class(&self, class_name: &str) -> Result<Class> {
+        // Nearly every resolution names a class that is already registered, which needs none of the loading machinery.
+        if let Some(class) = self.get_class(class_name) {
+            return Ok(class);
+        }
+
         self.resolve_class_internal(class_name, None).await
     }
 
