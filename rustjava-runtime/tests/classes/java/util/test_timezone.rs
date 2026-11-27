@@ -66,6 +66,35 @@ async fn test_timezone() -> Result<()> {
         .await?;
     assert_eq!(JavaLangString::to_rust_string(&jvm, &id).await?, "GMT");
 
+    // a zone east of GMT is known by ID, listed, and becomes the default when the user.timezone property names it
+    assert!(rust_ids.iter().any(|id| id == "KST"));
+    let key = JavaLangString::from_rust_string(&jvm, "user.timezone").await?;
+    let kst = JavaLangString::from_rust_string(&jvm, "KST").await?;
+    let _: ClassInstanceRef<rustjava_runtime::classes::java::lang::Object> = jvm
+        .invoke_static(
+            "java/lang/System",
+            "setProperty",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
+            (key, kst),
+        )
+        .await?;
+    let none: ClassInstanceRef<TimeZone> = None.into();
+    let _: () = jvm
+        .invoke_static("java/util/TimeZone", "setDefault", "(Ljava/util/TimeZone;)V", (none,))
+        .await?;
+    let default: ClassInstanceRef<TimeZone> = jvm
+        .invoke_static("java/util/TimeZone", "getDefault", "()Ljava/util/TimeZone;", ())
+        .await?;
+    let id: ClassInstanceRef<rustjava_runtime::classes::java::lang::String> = jvm
+        .invoke_virtual(&default, "java/util/TimeZone", "getID", "()Ljava/lang/String;", ())
+        .await?;
+    assert_eq!(JavaLangString::to_rust_string(&jvm, &id).await?, "KST");
+    assert_eq!(
+        jvm.invoke_virtual::<_, i32>(&default, "java/util/TimeZone", "getRawOffset", "()I", ())
+            .await?,
+        9 * 3_600_000
+    );
+
     Ok(())
 }
 

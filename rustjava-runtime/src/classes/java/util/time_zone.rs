@@ -9,6 +9,12 @@ use crate::{
     classes::java::lang::{Object, String},
 };
 
+const HOUR: i32 = 3_600_000;
+
+/// The zones `getTimeZone` knows by ID, with their offsets from GMT in milliseconds. `JST` is Java's
+/// three-letter ID for nine hours east; `KST` is the ID runtimes built for Korea give the same offset.
+const ZONES: [(&str, i32); 4] = [("GMT", 0), ("UTC", 0), ("JST", 9 * HOUR), ("KST", 9 * HOUR)];
+
 // abstract class java.util.TimeZone
 pub struct TimeZone;
 
@@ -85,13 +91,33 @@ impl TimeZone {
         }
 
         let requested_id = JavaLangString::to_rust_string(jvm, &id).await?;
-        let id = if requested_id == "GMT" || requested_id == "UTC" {
-            id
-        } else {
-            JavaLangString::from_rust_string(jvm, "GMT").await?.into()
+        let Some((_, raw_offset)) = ZONES.iter().find(|(zone_id, _)| *zone_id == requested_id) else {
+            return Self::gmt(jvm).await;
         };
+        let result = jvm
+            .new_class("java/util/SimpleTimeZone", "(ILjava/lang/String;)V", (*raw_offset, id))
+            .await?;
+        Ok(result.into())
+    }
+
+    async fn gmt(jvm: &Jvm) -> Result<ClassInstanceRef<Self>> {
+        let id = JavaLangString::from_rust_string(jvm, "GMT").await?;
         let result = jvm.new_class("java/util/SimpleTimeZone", "(ILjava/lang/String;)V", (0i32, id)).await?;
         Ok(result.into())
+    }
+
+    /// The zone the `user.timezone` system property names, GMT when it names none.
+    async fn host_zone(jvm: &Jvm) -> Result<ClassInstanceRef<Self>> {
+        let key = JavaLangString::from_rust_string(jvm, "user.timezone").await?;
+        let id: ClassInstanceRef<String> = jvm
+            .invoke_static("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", (key,))
+            .await?;
+        if id.is_null() {
+            return Self::gmt(jvm).await;
+        }
+
+        jvm.invoke_static("java/util/TimeZone", "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;", (id,))
+            .await
     }
 
     async fn get_default(jvm: &Jvm, _: &mut RuntimeContext) -> Result<ClassInstanceRef<Self>> {
@@ -101,11 +127,7 @@ impl TimeZone {
             .get_static_field("java/util/TimeZone", "defaultTimeZone", "Ljava/util/TimeZone;")
             .await?;
         if default.is_null() {
-            let id = JavaLangString::from_rust_string(jvm, "GMT").await?;
-            default = jvm
-                .new_class("java/util/SimpleTimeZone", "(ILjava/lang/String;)V", (0i32, id))
-                .await?
-                .into();
+            default = Self::host_zone(jvm).await?;
             jvm.put_static_field("java/util/TimeZone", "defaultTimeZone", "Ljava/util/TimeZone;", default.clone())
                 .await?;
         }
@@ -120,10 +142,7 @@ impl TimeZone {
         tracing::debug!("java.util.TimeZone::setDefault({timezone:?})");
 
         let stored: ClassInstanceRef<Self> = if timezone.is_null() {
-            let id = JavaLangString::from_rust_string(jvm, "GMT").await?;
-            jvm.new_class("java/util/SimpleTimeZone", "(ILjava/lang/String;)V", (0i32, id))
-                .await?
-                .into()
+            Self::host_zone(jvm).await?
         } else {
             let cloned: ClassInstanceRef<Object> = jvm
                 .invoke_virtual(&timezone, "java/lang/Object", "clone", "()Ljava/lang/Object;", ())
@@ -135,10 +154,11 @@ impl TimeZone {
     }
 
     async fn get_available_ids(jvm: &Jvm, _: &mut RuntimeContext) -> Result<ClassInstanceRef<Array<String>>> {
-        let mut ids: ClassInstanceRef<Array<String>> = jvm.instantiate_array("Ljava/lang/String;", 2).await?.into();
-        let gmt = JavaLangString::from_rust_string(jvm, "GMT").await?;
-        let utc = JavaLangString::from_rust_string(jvm, "UTC").await?;
-        jvm.store_array(&mut ids, 0, [gmt, utc]).await?;
+        let mut ids: ClassInstanceRef<Array<String>> = jvm.instantiate_array("Ljava/lang/String;", ZONES.len()).await?.into();
+        for (index, (id, _)) in ZONES.iter().enumerate() {
+            let id = JavaLangString::from_rust_string(jvm, id).await?;
+            jvm.store_array(&mut ids, index, [id]).await?;
+        }
         Ok(ids)
     }
 
