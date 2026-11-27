@@ -7,9 +7,10 @@ pub struct JavaLangString;
 impl JavaLangString {
     #[allow(clippy::borrowed_box)]
     pub async fn to_utf16(jvm: &Jvm, this: &Box<dyn ClassInstance>) -> Result<Vec<JavaChar>> {
-        let value = jvm.get_field(this, "java/lang/String", "value", "[C").await?;
-        let offset: i32 = jvm.get_field(this, "java/lang/String", "offset", "I").await?;
-        let count: i32 = jvm.get_field(this, "java/lang/String", "count", "I").await?;
+        let [value, offset, count] = jvm
+            .get_fields(this, "java/lang/String", [("value", "[C"), ("offset", "I"), ("count", "I")])
+            .await?;
+        let (value, offset, count): (Box<dyn ClassInstance>, i32, i32) = (value.into(), offset.into(), count.into());
 
         // access flags are not enforced, so bytecode can leave a negative here, which would widen into a huge usize
         if offset < 0 || count < 0 {

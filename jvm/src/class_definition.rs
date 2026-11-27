@@ -17,6 +17,11 @@ pub trait ClassDefinition: Sync + Send + AsAny + Debug + DynClone {
     async fn prepare(&self, jvm: &Jvm) -> Result<()>;
     fn method(&self, name: &str, descriptor: &str, is_static: bool) -> Option<Box<dyn Method>>;
     fn field(&self, name: &str, descriptor: &str, is_static: bool) -> Option<Box<dyn Field>>;
+    /// The fields `names` gives as (name, descriptor), in that order. A definition that walks a table for each
+    /// name can walk it once for all of them.
+    fn find_fields(&self, names: &[(&str, &str)], is_static: bool) -> Vec<Option<Box<dyn Field>>> {
+        names.iter().map(|(name, descriptor)| self.field(name, descriptor, is_static)).collect()
+    }
     fn fields(&self) -> Vec<Box<dyn Field>>;
     fn get_static_field(&self, field: &dyn Field) -> Result<JavaValue>; // TODO do we need to split class? or rename classdefinition?
     fn put_static_field(&mut self, field: &dyn Field, value: JavaValue) -> Result<()>;

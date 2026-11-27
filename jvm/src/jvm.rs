@@ -293,7 +293,36 @@ impl Jvm {
     {
         tracing::trace!("Get field {class_name}.{name}:{descriptor}");
 
-        if let Some(field) = self.resolve_instance_field(class_name, name, descriptor).await? {
+        let field = self.resolve_instance_field(class_name, name, descriptor).await?;
+        Ok(self.read_instance_field(instance, field, class_name, name, descriptor).await?.into())
+    }
+
+    /// Reads the instance fields `fields` gives as (name, descriptor), in that order. Their class is searched once for all of them.
+    pub async fn get_fields<const N: usize>(
+        &self,
+        instance: &Box<dyn ClassInstance>,
+        class_name: &str,
+        fields: [(&str, &str); N],
+    ) -> Result<[JavaValue; N]> {
+        tracing::trace!("Get fields {class_name}.{fields:?}");
+
+        let resolved = self.resolve_instance_fields(class_name, &fields).await?;
+        let mut values = [const { JavaValue::Void }; N];
+        for ((value, field), (name, descriptor)) in values.iter_mut().zip(resolved).zip(fields) {
+            *value = self.read_instance_field(instance, field, class_name, name, descriptor).await?;
+        }
+        Ok(values)
+    }
+
+    async fn read_instance_field(
+        &self,
+        instance: &Box<dyn ClassInstance>,
+        field: Option<Box<dyn Field>>,
+        class_name: &str,
+        name: &str,
+        descriptor: &str,
+    ) -> Result<JavaValue> {
+        if let Some(field) = field {
             if field.access_flags().contains(FieldAccessFlags::STATIC) {
                 return Err(self
                     .exception("java/lang/IncompatibleClassChangeError", &format!("{class_name}.{name}:{descriptor}"))
@@ -311,7 +340,7 @@ impl Jvm {
                     .local_variables_mut()
                     .push(instance.clone());
             }
-            Ok(value.into())
+            Ok(value)
         } else {
             Err(self
                 .exception("java/lang/NoSuchFieldError", &format!("{class_name}.{name}:{descriptor}"))
@@ -1338,6 +1367,28 @@ impl Jvm {
 
         let class = self.resolve_class(class_name).await?;
         Ok(field(&self.inner.classes.read(), &class))
+    }
+
+    /// The fields an access to several instance fields of one class names, the class itself searched once for all of them.
+    async fn resolve_instance_fields(&self, class_name: &str, fields: &[(&str, &str)]) -> Result<Vec<Option<Box<dyn Field>>>> {
+        let resolve = |classes: &BTreeMap<String, Class>, class: &Class| {
+            let mut resolved = class.definition.find_fields(fields, false);
+            for (field, (name, descriptor)) in resolved.iter_mut().zip(fields) {
+                if field.is_none() {
+                    *field = Self::resolve_field(classes, class, name, descriptor, false).map(|(_, field)| field);
+                }
+            }
+            resolved
+        };
+        {
+            let classes = self.inner.classes.read();
+            if let Some(class) = classes.get(class_name) {
+                return Ok(resolve(&classes, class));
+            }
+        }
+
+        let class = self.resolve_class(class_name).await?;
+        Ok(resolve(&self.inner.classes.read(), &class))
     }
 
     // JVMS 5.4.3.3 method resolution searches the class hierarchy before inherited interface methods.
