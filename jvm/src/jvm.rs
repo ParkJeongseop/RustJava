@@ -306,12 +306,42 @@ impl Jvm {
     ) -> Result<[JavaValue; N]> {
         tracing::trace!("Get fields {class_name}.{fields:?}");
 
-        let resolved = self.resolve_instance_fields(class_name, &fields).await?;
+        // What the class itself declares is read in one pass over it; the rest is resolved as a single access is.
+        let read = |class: &Class| instance.get_fields(&*class.definition, &fields);
+        let registered = self.inner.classes.read().get(class_name).map(read);
+        let found = match registered {
+            Some(found) => found?,
+            None => read(&self.resolve_class(class_name).await?)?,
+        };
         let mut values = [const { JavaValue::Void }; N];
-        for ((value, field), (name, descriptor)) in values.iter_mut().zip(resolved).zip(fields) {
-            *value = self.read_instance_field(instance, field, class_name, name, descriptor).await?;
+        for ((value, found), (name, descriptor)) in values.iter_mut().zip(found).zip(fields) {
+            *value = match found {
+                Some(found) => {
+                    self.keep_field_value(&found);
+                    found
+                }
+                None => {
+                    let field = self.resolve_instance_field(class_name, name, descriptor).await?;
+                    self.read_instance_field(instance, field, class_name, name, descriptor).await?
+                }
+            };
         }
         Ok(values)
+    }
+
+    /// Keeps an object a field read gave reachable from the frame that read it.
+    fn keep_field_value(&self, value: &JavaValue) {
+        if let JavaValue::Object(Some(instance)) = value {
+            let thread_id = (self.inner.get_current_thread_id)();
+            self.inner
+                .threads
+                .write()
+                .get_mut(&thread_id)
+                .unwrap()
+                .top_frame_mut()
+                .local_variables_mut()
+                .push(instance.clone());
+        }
     }
 
     async fn read_instance_field(
@@ -329,17 +359,7 @@ impl Jvm {
                     .await);
             }
             let value = instance.get_field(&*field)?;
-            if let JavaValue::Object(Some(instance)) = &value {
-                let thread_id = (self.inner.get_current_thread_id)();
-                self.inner
-                    .threads
-                    .write()
-                    .get_mut(&thread_id)
-                    .unwrap()
-                    .top_frame_mut()
-                    .local_variables_mut()
-                    .push(instance.clone());
-            }
+            self.keep_field_value(&value);
             Ok(value)
         } else {
             Err(self
@@ -388,7 +408,7 @@ impl Jvm {
 
             self.ensure_initialized(&declaring_class).await?;
 
-            Ok(self.execute_method(&declaring_class, None, &method, args).await?.into())
+            Ok(self.execute_method(&declaring_class, None, method, args).await?.into())
         } else {
             tracing::error!("No such method: {class_name}.{name}:{descriptor}");
 
@@ -421,13 +441,12 @@ impl Jvm {
         }
 
         let instance_class = instance.class_definition();
-        let instance_class_name = instance_class.name();
         let mut selected = None;
-        if instance_class_name == resolved_class.definition.name() {
+        if instance_class.is_same(&*resolved_class.definition) {
             // The instance's own class declares the resolved method, so nothing overrides it.
             selected = Some((resolved_class, resolved_method));
         } else {
-            let mut class = self.get_class(&instance_class_name);
+            let mut class = self.get_class(&instance_class.name());
             while let Some(candidate_class) = class {
                 if let Some(candidate_method) = candidate_class.definition.method(name, descriptor, false)
                     && self.method_overrides(&candidate_class, &candidate_method, &resolved_class, &resolved_method)
@@ -458,7 +477,7 @@ impl Jvm {
             .chain(args.into_vec())
             .collect::<Vec<_>>();
         Ok(self
-            .execute_method(&declaring_class, Some(instance.clone()), &method, args.into_boxed_slice())
+            .execute_method(&declaring_class, Some(instance.clone()), method, args.into_boxed_slice())
             .await?
             .into())
     }
@@ -499,7 +518,7 @@ impl Jvm {
             }
 
             Ok(self
-                .execute_method(&class, Some(instance.clone()), &method, args.into_boxed_slice())
+                .execute_method(&class, Some(instance.clone()), method, args.into_boxed_slice())
                 .await?
                 .into())
         } else {
@@ -1038,7 +1057,7 @@ impl Jvm {
                 if self.is_inherited_from(&*x.class.definition, "java/lang/Throwable") {
                     None
                 } else {
-                    Some(format!("{}.{}", x.class.definition.name(), x.method))
+                    Some(format!("{}.{}{}", x.class.definition.name(), x.method.name(), x.method.descriptor()))
                 }
             })
             .collect()
@@ -1179,7 +1198,7 @@ impl Jvm {
         if let Some(clinit) = class.definition.method("<clinit>", "()V", true) {
             tracing::debug!("Calling <clinit> for {}", class.definition.name());
 
-            if let Err(err) = self.execute_method(class, None, &clinit, Box::new([])).await {
+            if let Err(err) = self.execute_method(class, None, clinit, Box::new([])).await {
                 class.finish_initialization(InitState::Erroneous);
 
                 let JavaError::JavaException(exception) = &err;
@@ -1369,28 +1388,6 @@ impl Jvm {
         Ok(field(&self.inner.classes.read(), &class))
     }
 
-    /// The fields an access to several instance fields of one class names, the class itself searched once for all of them.
-    async fn resolve_instance_fields(&self, class_name: &str, fields: &[(&str, &str)]) -> Result<Vec<Option<Box<dyn Field>>>> {
-        let resolve = |classes: &BTreeMap<String, Class>, class: &Class| {
-            let mut resolved = class.definition.find_fields(fields, false);
-            for (field, (name, descriptor)) in resolved.iter_mut().zip(fields) {
-                if field.is_none() {
-                    *field = Self::resolve_field(classes, class, name, descriptor, false).map(|(_, field)| field);
-                }
-            }
-            resolved
-        };
-        {
-            let classes = self.inner.classes.read();
-            if let Some(class) = classes.get(class_name) {
-                return Ok(resolve(&classes, class));
-            }
-        }
-
-        let class = self.resolve_class(class_name).await?;
-        Ok(resolve(&self.inner.classes.read(), &class))
-    }
-
     // JVMS 5.4.3.3 method resolution searches the class hierarchy before inherited interface methods.
     fn resolve_method(&self, class: &Class, name: &str, descriptor: &str, expected_static: bool) -> Option<(Class, Box<dyn Method>)> {
         let mut class = Some(class.clone());
@@ -1519,11 +1516,12 @@ impl Jvm {
         &self,
         class: &Class,
         class_instance: Option<Box<dyn ClassInstance>>,
-        method: &Box<dyn Method>,
+        method: Box<dyn Method>,
         args: Box<[JavaValue]>,
     ) -> Result<JavaValue> {
         let thread_id = (self.inner.get_current_thread_id)();
-        let method_str = format!("{}{}", method.name(), method.descriptor());
+        // The frame shares the method: its name is wanted only if a stack trace is taken.
+        let method: Arc<dyn Method> = method.into();
 
         let synchronized_object = if method.access_flags().contains(MethodAccessFlags::SYNCHRONIZED) {
             Some(class_instance.clone().unwrap_or_else(|| class.java_class()))
@@ -1535,7 +1533,7 @@ impl Jvm {
             .write()
             .get_mut(&thread_id)
             .unwrap()
-            .push_java_frame(class, class_instance, &method_str, &args);
+            .push_java_frame(class, class_instance, method.clone(), &args);
 
         if let Some(object) = &synchronized_object
             && let Err(error) = self.monitor_enter(object).await

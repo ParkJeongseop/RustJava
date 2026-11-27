@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
@@ -19,6 +19,14 @@ pub trait ClassInstance: Sync + Send + AsAny + Debug + DynHash + DynClone + 'sta
     fn equals(&self, other: &dyn ClassInstance) -> Result<bool>;
     fn get_field(&self, field: &dyn Field) -> Result<JavaValue>;
     fn put_field(&mut self, field: &dyn Field, value: JavaValue) -> Result<()>;
+    /// The values of the instance fields `names` gives as (name, descriptor), in that order; `None` for one `class` itself does
+    /// not declare. An instance that reads its fields from a table can take them all in one pass over it.
+    fn get_fields(&self, class: &dyn ClassDefinition, names: &[(&str, &str)]) -> Result<Vec<Option<JavaValue>>> {
+        names
+            .iter()
+            .map(|(name, descriptor)| class.field(name, descriptor, false).map(|field| self.get_field(&*field)).transpose())
+            .collect()
+    }
     fn as_array_instance(&self) -> Option<&dyn ArrayClassInstance> {
         None
     }

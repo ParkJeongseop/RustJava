@@ -1,13 +1,8 @@
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
 use event_listener::Event;
 
-use crate::{ClassInstance, JavaValue, class_loader::Class, monitor::MonitorWaitTimeout};
+use crate::{ClassInstance, JavaValue, Method, class_loader::Class, monitor::MonitorWaitTimeout};
 
 #[derive(Clone)]
 pub(crate) enum ThreadInterruptWaiter {
@@ -73,11 +68,11 @@ impl JvmThread {
         self.java_thread = Some(java_thread);
     }
 
-    pub fn push_java_frame(&mut self, class: &Class, class_instance: Option<Box<dyn ClassInstance>>, method: &str, args: &[JavaValue]) {
+    pub fn push_java_frame(&mut self, class: &Class, class_instance: Option<Box<dyn ClassInstance>>, method: Arc<dyn Method>, args: &[JavaValue]) {
         self.stack.push(StackFrame::Java(JavaStackFrame {
             class: class.clone(),
             class_instance,
-            method: method.to_string(),
+            method,
             local_variables: args
                 .iter()
                 .filter_map(|arg| match arg {
@@ -122,7 +117,7 @@ impl JvmThread {
 pub struct JavaStackFrame {
     pub class: Class,
     pub class_instance: Option<Box<dyn ClassInstance>>,
-    pub method: String,
+    pub method: Arc<dyn Method>,
     pub local_variables: Vec<Box<dyn ClassInstance>>,
 }
 
